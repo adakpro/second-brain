@@ -1,0 +1,110 @@
+{
+	# High internal ports allow the same config to run as a non-root Kubernetes pod.
+	http_port 8080
+	https_port 8443
+	admin 127.0.0.1:2019
+	# Browsers commonly omit SNI when connecting to an IP literal. Select the
+	# managed IP certificate explicitly for those TLS handshakes.
+	default_sni {$CADDY_DEFAULT_SNI:localhost}
+	# TLS terminates on container port 8443 but is published as host port 443.
+	# Disable HTTP/3 so Alt-Svc never advertises the unreachable internal port.
+	servers {
+		protocols h1 h2
+	}
+	# IP-address certificates require Let's Encrypt's short-lived ACME profile.
+	# Domain deployments can use the same automatically renewed profile.
+	cert_issuer acme {
+		profile shortlived
+	}
+}
+
+(outer_auth) {
+	basic_auth {
+		{$CADDY_BASIC_AUTH_USER} {$CADDY_BASIC_AUTH_HASH}
+	}
+}
+
+(security_headers) {
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+}
+
+(app_permissions) {
+	header Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+}
+
+(dashboard_permissions) {
+	header Permissions-Policy "camera=(), microphone=(), geolocation=()"
+}
+
+{$APP_ADDRESS:http://localhost} {
+	import outer_auth
+	import security_headers
+	import app_permissions
+	encode zstd gzip
+
+	# Browser clients use same-origin paths. Caddy replaces their Basic header
+	# with the internal credential expected by each sidecar.
+	redir /api/hermes /api/hermes/ 308
+	handle_path /api/hermes/* {
+		reverse_proxy hermes:8642 {
+			header_up Authorization "Bearer {$HERMES_API_KEY}"
+		}
+	}
+
+	redir /api/knowledge /api/knowledge/ 308
+	# Imports are a server-to-server operation behind the bounded, same-origin
+	# frontend BFF. Never expose the sidecar upload endpoint through the generic
+	# API-key-injecting proxy where its admission controls could be bypassed.
+	@directKnowledgeImport path /api/knowledge/imports /api/knowledge/imports/*
+	handle @directKnowledgeImport {
+		respond 404
+	}
+	# Destructive vault mutations also go through the same-origin frontend BFF,
+	# which validates the exact node revision before forwarding server-to-server.
+	@directKnowledgeDelete {
+		method DELETE
+		path /api/knowledge/nodes/* /api/knowledge/notes/*
+	}
+	handle @directKnowledgeDelete {
+		respond 404
+	}
+	handle_path /api/knowledge/* {
+		reverse_proxy knowledge:8000 {
+			header_up -Authorization
+			header_up X-API-Key {$KNOWLEDGE_API_KEY}
+		}
+	}
+
+	handle /api/control/knowledge/import {
+		request_body {
+			max_size 68MiB
+		}
+		reverse_proxy frontend:3000 {
+			header_up -Authorization
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:3000 {
+			header_up -Authorization
+		}
+	}
+}
+
+{$DASHBOARD_ADDRESS:http://dashboard.localhost} {
+	import outer_auth
+	import security_headers
+	import dashboard_permissions
+	encode zstd gzip
+	reverse_proxy hermes:9119 {
+		# Caddy has already checked this Basic header. The official dashboard
+		# performs its own cookie-backed login and must not receive it.
+		header_up -Authorization
+	}
+}

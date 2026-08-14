@@ -1,0 +1,11 @@
+-r requirements-core.txt
+
+# Fully local production embeddings/vector search. The application falls back to
+# its deterministic stdlib embedder and exact cosine search if these are absent.
+# The Docker image installs an explicitly pinned CPU-only PyTorch wheel first;
+# installing this file directly from PyPI may otherwise resolve CUDA packages.
+numpy==2.5.2
+faiss-cpu==1.15.0
+sentence-transformers==5.7.0
+transformers==5.15.0
+huggingface-hub==1.27.0

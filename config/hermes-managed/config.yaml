@@ -1,0 +1,5 @@
+# Hermes v2026.8.3 startup auto-prune does not protect pinned or archived
+# sessions. Managed scope is merged after every root/profile user config and is
+# immutable to Hermes, so this leaf remains false across all s6 hot restarts.
+sessions:
+  auto_prune: false

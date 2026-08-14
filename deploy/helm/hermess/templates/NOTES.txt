@@ -1,0 +1,42 @@
+Hermess is installed with one stateful Hermes replica.
+
+The frontend, knowledge, and parser-only extractor images are project-owned build artifacts. Ensure
+{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }} and
+{{ .Values.knowledge.image.repository }}:{{ .Values.knowledge.image.tag }} and
+{{ .Values.extractor.image.repository }}:{{ .Values.extractor.image.tag }} are
+available to this cluster (or override all three image values with registry tags).
+
+{{- if not .Values.secrets.create }}
+Before the workloads can become Ready, create Secret {{ include "hermess.secretName" . }}
+with these keys:
+
+  HERMES_API_KEY
+  KNOWLEDGE_API_KEY
+  CADDY_BASIC_AUTH_USER
+  CADDY_BASIC_AUTH_HASH
+  HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+  HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+  HERMES_DASHBOARD_BASIC_AUTH_SECRET
+
+Optional provider keys: OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY,
+and LOCAL_LLM_API_KEY. Prefer External Secrets or Sealed Secrets in production.
+{{- if .Values.frontend.solari.enabled }}
+
+Solari is enabled, so the Secret must also contain the server-only key. The
+frontend mounts it read-only at /run/secrets/openai_realtime_api_key (0440):
+
+  OPENAI_REALTIME_API_KEY
+{{- end }}
+{{- end }}
+
+Point {{ .Values.caddy.appAddress }} and {{ .Values.caddy.dashboardAddress }} at
+the external address of Service {{ include "hermess.fullname" . }}-caddy.
+
+Authenticate Codex OAuth into the persistent Hermes volume:
+
+  kubectl exec -it statefulset/{{ include "hermess.fullname" . }}-hermes -- \
+    s6-setuidgid hermes hermes auth add openai-codex
+
+Check readiness:
+
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}

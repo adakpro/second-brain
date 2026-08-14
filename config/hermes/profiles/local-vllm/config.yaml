@@ -1,0 +1,43 @@
+# Edit model.default and base_url to match the model served by your local
+# OpenAI-compatible runtime. In Compose, use its service name rather than localhost.
+_config_version: 33
+
+model:
+  provider: custom
+  default: local-model
+  base_url: http://vllm:8000/v1
+  api_key: none
+
+fallback_providers:
+  - provider: openai-codex
+    model: gpt-5.6-sol
+  - provider: openrouter
+    model: anthropic/claude-sonnet-4.6
+
+agent:
+  max_turns: 200
+  api_max_retries: 1
+
+tool_loop_guardrails:
+  hard_stop_enabled: true
+  hard_stop_after:
+    exact_failure: 5
+    idempotent_no_progress: 5
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+
+platforms:
+  api_server:
+    enabled: false # named-profile listener guard
+    extra:
+      direct_model_requests: true
+      model_routes:
+        local:
+          provider: custom
+          model: local-model
+          base_url: http://vllm:8000/v1
+        coding:
+          provider: openai-codex
+          model: gpt-5.6-sol

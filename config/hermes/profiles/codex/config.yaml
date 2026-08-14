@@ -1,0 +1,49 @@
+_config_version: 33
+
+model:
+  provider: openai-codex
+  default: gpt-5.6-sol
+  # Keep Hermes' complete memory, delegation, cron, and tool loop. The separate
+  # Codex app-server runtime is optional and is not bundled in the stock image.
+  openai_runtime: auto
+
+fallback_providers:
+  - provider: openrouter
+    model: anthropic/claude-sonnet-4.6
+  - provider: anthropic
+    model: claude-sonnet-4-6
+
+agent:
+  max_turns: 200
+  api_max_retries: 1
+  reasoning_effort: high
+  verify_on_stop: auto
+
+tool_loop_guardrails:
+  hard_stop_enabled: true
+  hard_stop_after:
+    exact_failure: 5
+    idempotent_no_progress: 5
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  nudge_interval: 10
+  flush_min_turns: 6
+
+skills:
+  creation_nudge_interval: 15
+
+platforms:
+  api_server:
+    enabled: false # named-profile listener guard
+    extra:
+      direct_model_requests: true
+      # Aliases let clients choose a task posture without learning provider IDs.
+      model_routes:
+        coding:
+          provider: openai-codex
+          model: gpt-5.6-sol
+        fast:
+          provider: openai-codex
+          model: gpt-5.6-luna

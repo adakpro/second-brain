@@ -1,0 +1,4 @@
+interface:
+  display_name: "Idea Gardener"
+  short_description: "Grow fragments into connected, durable ideas"
+  default_prompt: "Use $idea-gardener to develop this fragment into a connected idea."

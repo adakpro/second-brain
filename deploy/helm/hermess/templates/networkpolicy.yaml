@@ -1,0 +1,79 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hermess.fullname" . }}-caddy
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hermess.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: caddy
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+        - port: 8443
+          protocol: TCP
+        - port: 8443
+          protocol: UDP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hermess.fullname" . }}-internal
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [hermes, frontend]
+    matchLabels:
+      {{- include "hermess.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "hermess.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: caddy
+        - podSelector:
+            matchLabels:
+              {{- include "hermess.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: frontend
+        - podSelector:
+            matchLabels:
+              {{- include "hermess.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: hermes
+{{- end }}
+---
+# The parser is deliberately unauthenticated because it never leaves this
+# network boundary. Only the stateful writer pod may submit a document, and the
+# parser cannot resolve or connect to DNS, cluster services, or the Internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hermess.fullname" . }}-extractor
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+    app.kubernetes.io/component: extractor
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hermess.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: extractor
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "hermess.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: hermes
+      ports:
+        - port: 8010
+          protocol: TCP
+  egress: []

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspiration Board"
+  short_description: "Curate living knowledge boards in Obsidian"
+  default_prompt: "Use $inspiration-board to curate a living board around this theme."

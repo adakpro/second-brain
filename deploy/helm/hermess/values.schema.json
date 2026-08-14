@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "hermes": {
+      "type": "object",
+      "required": ["defaultProfile", "profiles"],
+      "properties": {
+        "defaultProfile": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
+        "profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"pattern": "^[a-z0-9_-]+$"},
+          "additionalProperties": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "properties": {
+        "vaultName": {"type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^/\\\\\\r\\n]+$"},
+        "modelRevision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "import": {
+          "type": "object",
+          "required": ["maxFiles", "maxFileBytes", "maxTotalBytes", "maxExtractedBytes", "parserTimeoutSeconds", "batchDeadlineSeconds", "originalQuotaBytes", "freeSpaceReserveBytes"],
+          "properties": {
+            "maxFiles": {"type": "integer", "minimum": 1, "maximum": 12},
+            "maxFileBytes": {"type": "integer", "minimum": 1024, "maximum": 16777216},
+            "maxTotalBytes": {"type": "integer", "minimum": 1024, "maximum": 67108864},
+            "maxExtractedBytes": {"type": "integer", "minimum": 1024, "maximum": 1900000},
+            "parserTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
+            "batchDeadlineSeconds": {"type": "integer", "minimum": 5, "maximum": 90},
+            "originalQuotaBytes": {"type": "integer", "minimum": 67108864, "maximum": 8589934592},
+            "freeSpaceReserveBytes": {"type": "integer", "minimum": 67108864, "maximum": 4294967296}
+          }
+        }
+      }
+    },
+    "extractor": {
+      "type": "object",
+      "required": ["replicas", "image", "resources"],
+      "properties": {
+        "replicas": {"type": "integer", "const": 1},
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": {"type": "string", "minLength": 1},
+            "tag": {"type": "string", "minLength": 1},
+            "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]}
+          }
+        },
+        "resources": {"type": "object"}
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "required": ["replicas", "solari"],
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 1, "maximum": 1},
+        "solari": {
+          "type": "object",
+          "required": ["enabled", "model"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "model": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^gpt-realtime(?:-[A-Za-z0-9.]+)?$"}
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "required": ["create"],
+      "properties": {
+        "create": {"type": "boolean"},
+        "existingSecret": {"type": "string"},
+        "values": {
+          "type": "object",
+          "properties": {
+            "hermesApiKey": {"type": "string"},
+            "knowledgeApiKey": {"type": "string"},
+            "caddyBasicAuthUser": {"type": "string"},
+            "caddyBasicAuthHash": {"type": "string"},
+            "dashboardUsername": {"type": "string"},
+            "dashboardPassword": {"type": "string"},
+            "dashboardSessionSecret": {"type": "string"},
+            "solariRealtimeApiKey": {"type": "string"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"create": {"const": false}}},
+          "then": {"properties": {"existingSecret": {"minLength": 1}}}
+        },
+        {
+          "if": {"properties": {"create": {"const": true}}},
+          "then": {
+            "properties": {
+              "values": {
+                "properties": {
+                  "hermesApiKey": {"minLength": 32},
+                  "knowledgeApiKey": {"minLength": 32},
+                  "caddyBasicAuthUser": {"minLength": 1},
+                  "caddyBasicAuthHash": {"minLength": 20},
+                  "dashboardUsername": {"minLength": 1},
+                  "dashboardPassword": {"minLength": 12},
+                  "dashboardSessionSecret": {"minLength": 32}
+                },
+                "required": [
+                  "hermesApiKey",
+                  "knowledgeApiKey",
+                  "caddyBasicAuthUser",
+                  "caddyBasicAuthHash",
+                  "dashboardUsername",
+                  "dashboardPassword",
+                  "dashboardSessionSecret"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

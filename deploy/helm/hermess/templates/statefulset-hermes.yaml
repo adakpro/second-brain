@@ -1,0 +1,459 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "hermess.fullname" . }}-hermes
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hermes
+spec:
+  # Hermes state stores are not safe for concurrent writers.
+  replicas: 1
+  serviceName: {{ include "hermess.fullname" . }}-hermes-headless
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "hermess.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: hermes
+  template:
+    metadata:
+      annotations:
+        checksum/bootstrap: {{ include (print $.Template.BasePath "/configmap-hermes.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "hermess.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: hermes
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: {{ .Values.hermes.gid }}
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: bootstrap
+          image: alpine:3.22
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [DAC_OVERRIDE, CHOWN, FOWNER]
+          env:
+            - name: HERMES_DEFAULT_PROFILE
+              value: {{ .Values.hermes.defaultProfile | quote }}
+            - name: HERMES_UID
+              value: {{ .Values.hermes.uid | quote }}
+            - name: HERMES_GID
+              value: {{ .Values.hermes.gid | quote }}
+            - name: OBSIDIAN_VAULT_NAME
+              value: {{ .Values.knowledge.vaultName | quote }}
+            - name: API_SERVER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: HERMES_API_KEY
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              case "$HERMES_DEFAULT_PROFILE" in *[!a-z0-9_-]*|'') exit 64;; esac
+              if [ "${#API_SERVER_KEY}" -lt 16 ] || printf '%s' "$API_SERVER_KEY" | LC_ALL=C grep -q '[[:space:]]'; then
+                echo "API_SERVER_KEY must be at least 16 characters with no whitespace" >&2
+                exit 64
+              fi
+              case "$OBSIDIAN_VAULT_NAME" in
+                ''|*/*|*\\*) echo "OBSIDIAN_VAULT_NAME must be a non-empty vault label, not a path" >&2; exit 64 ;;
+              esac
+              test "${#OBSIDIAN_VAULT_NAME}" -le 120
+              provision_profile_api_key() {
+                env_file=$1
+                temporary_file="${env_file}.bootstrap.$$"
+                source_env=$env_file
+                [ -f "$source_env" ] || source_env=/dev/null
+                awk '
+                  BEGIN { written = 0 }
+                  /^API_SERVER_KEY=/ {
+                    if (!written) {
+                      print "API_SERVER_KEY=" ENVIRON["API_SERVER_KEY"]
+                      written = 1
+                    }
+                    next
+                  }
+                  { print }
+                  END {
+                    if (!written) print "API_SERVER_KEY=" ENVIRON["API_SERVER_KEY"]
+                  }
+                ' "$source_env" > "$temporary_file"
+                mv "$temporary_file" "$env_file"
+                chmod 600 "$env_file"
+              }
+              source_file="/bootstrap/root-profile-${HERMES_DEFAULT_PROFILE}.yaml"
+              test -f "$source_file"
+              umask 077
+              mkdir -p /opt/data/profiles /opt/data/skills /knowledge-data/notes
+              install_managed_skills() {
+                target_home=$1
+                for skill_name in daily-synthesis obsidian-knowledge idea-gardener concept-remixer inspiration-board solari-orchestrator; do
+                  mkdir -p "$target_home/skills/$skill_name"
+                  cp "/bootstrap/skill-${skill_name}.md" "$target_home/skills/$skill_name/SKILL.md"
+                  chmod 640 "$target_home/skills/$skill_name/SKILL.md"
+                  if [ "$skill_name" = solari-orchestrator ]; then
+                    mkdir -p "$target_home/skills/$skill_name/references"
+                    cp /bootstrap/skill-solari-orchestrator-roles.md "$target_home/skills/$skill_name/references/roles.md"
+                    chmod 640 "$target_home/skills/$skill_name/references/roles.md"
+                  fi
+                done
+              }
+              if [ ! -f /opt/data/config.yaml ]; then
+                cp "$source_file" /opt/data/config.yaml
+                chmod 640 /opt/data/config.yaml
+              fi
+              if [ ! -f /opt/data/SOUL.md ]; then
+                cp /bootstrap/SOUL.md /opt/data/SOUL.md
+                chmod 640 /opt/data/SOUL.md
+              fi
+              install_managed_skills /opt/data
+              for source in /bootstrap/profile-*.yaml; do
+                profile=${source##*/profile-}; profile=${profile%.yaml}
+                destination="/opt/data/profiles/$profile"
+                mkdir -p "$destination"
+                if [ ! -f "$destination/config.yaml" ]; then
+                  cp "$source" "$destination/config.yaml"
+                  chmod 640 "$destination/config.yaml"
+                fi
+                profile_soul=/bootstrap/SOUL.md
+                if [ -f "/bootstrap/profile-${profile}-soul.md" ]; then
+                  profile_soul="/bootstrap/profile-${profile}-soul.md"
+                fi
+                if [ ! -f "$destination/SOUL.md" ]; then
+                  cp "$profile_soul" "$destination/SOUL.md"
+                  chmod 640 "$destination/SOUL.md"
+                fi
+                provision_profile_api_key "$destination/.env"
+                install_managed_skills "$destination"
+              done
+              # Include profiles created natively on an existing PVC, not only
+              # the declarative values list used to seed a fresh installation.
+              for destination in /opt/data/profiles/*; do
+                [ -d "$destination" ] || continue
+                provision_profile_api_key "$destination/.env"
+                install_managed_skills "$destination"
+              done
+              disable_unsafe_auto_prune() {
+                config_file=$1
+                [ -f "$config_file" ] || return 0
+                temporary_file="${config_file}.safety.$$"
+                sed -E 's/(^|[,{])([[:space:]]*auto_prune:[[:space:]]*)(true|True|TRUE|yes|Yes|YES|on|On|ON|1)/\1\2false/g' "$config_file" > "$temporary_file"
+                mv "$temporary_file" "$config_file"
+              }
+              disable_unsafe_auto_prune /opt/data/config.yaml
+              for profile_config in /opt/data/profiles/*/config.yaml; do
+                disable_unsafe_auto_prune "$profile_config"
+              done
+              chown "$HERMES_UID:$HERMES_GID" /opt/data
+              chown -R "$HERMES_UID:$HERMES_GID" /opt/data/profiles /opt/data/skills
+              chmod 750 /opt/data /opt/data/profiles /opt/data/skills
+              find /opt/data/profiles /opt/data/skills -type d -exec chmod 750 {} +
+              find /opt/data/profiles /opt/data/skills -type f ! -name .env -exec chmod 640 {} +
+              find /opt/data/profiles -type f -name .env -exec chmod 600 {} +
+              for seeded_file in /opt/data/config.yaml /opt/data/SOUL.md; do
+                if [ -f "$seeded_file" ]; then
+                  chown "$HERMES_UID:$HERMES_GID" "$seeded_file"
+                  chmod 640 "$seeded_file"
+                fi
+              done
+              # Both state trees are mounted by containers in this one Pod.
+              # Keep one private owner/group so RWO volumes never need to be
+              # cross-mounted by separate pods.
+              chown -R "$HERMES_UID:$HERMES_GID" /knowledge-data
+              find /knowledge-data -type d -exec chmod 750 {} +
+              find /knowledge-data -type f -exec chmod 640 {} +
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+            - name: bootstrap
+              mountPath: /bootstrap
+              readOnly: true
+            - name: knowledge-data
+              mountPath: /knowledge-data
+        - name: seed-knowledge
+          image: {{ include "hermess.image" .Values.knowledge.image | quote }}
+          imagePullPolicy: {{ .Values.knowledge.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              mkdir -p /data/notes /data/state
+              if [ -z "$(find /data/notes -mindepth 1 -print -quit)" ]; then
+                cp -R /opt/bootstrap-notes/. /data/notes/
+              fi
+          securityContext:
+            runAsUser: {{ .Values.hermes.uid }}
+            runAsGroup: {{ .Values.hermes.gid }}
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: knowledge-data
+              mountPath: /data
+      containers:
+        - name: hermes
+          image: {{ include "hermess.image" .Values.hermes.image | quote }}
+          imagePullPolicy: {{ .Values.hermes.image.pullPolicy }}
+          args: ["gateway", "run"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+          env:
+            - name: HERMES_UID
+              value: {{ .Values.hermes.uid | quote }}
+            - name: HERMES_GID
+              value: {{ .Values.hermes.gid | quote }}
+            - name: HERMES_MANAGED_DIR
+              value: /etc/hermes
+            - name: HERMES_GATEWAY_BOOTSTRAP_STATE
+              value: running
+            - name: GATEWAY_MULTIPLEX_PROFILES
+              value: "true"
+            - name: API_SERVER_ENABLED
+              value: "true"
+            - name: API_SERVER_HOST
+              value: 0.0.0.0
+            - name: API_SERVER_PORT
+              value: "8642"
+            - name: API_SERVER_CORS_ORIGINS
+              value: {{ .Values.caddy.appPublicUrl | quote }}
+            - name: API_SERVER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: HERMES_API_KEY
+            - name: HERMES_DASHBOARD
+              value: "1"
+            - name: HERMES_DASHBOARD_HOST
+              value: 0.0.0.0
+            - name: HERMES_DASHBOARD_PORT
+              value: "9119"
+            - name: HERMES_DASHBOARD_PUBLIC_URL
+              value: {{ .Values.caddy.dashboardPublicUrl | quote }}
+            - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+            - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+            - name: HERMES_DASHBOARD_BASIC_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: HERMES_DASHBOARD_BASIC_AUTH_SECRET
+            - name: KNOWLEDGE_API_URL
+              value: http://{{ include "hermess.fullname" . }}-knowledge:8000
+            - name: KNOWLEDGE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: KNOWLEDGE_API_KEY
+            # The agent can inspect the Obsidian-compatible source tree, but
+            # mutations remain behind the knowledge API's revision checks.
+            - name: OBSIDIAN_VAULT_PATH
+              value: /vault
+            - name: OBSIDIAN_VAULT_NAME
+              value: {{ .Values.knowledge.vaultName | quote }}
+            {{- range $key := list "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "OPENAI_API_KEY" "LOCAL_LLM_API_KEY" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" $ }}
+                  key: {{ $key }}
+                  optional: true
+            {{- end }}
+          ports:
+            - name: api
+              containerPort: 8642
+            - name: dashboard
+              containerPort: 9119
+          startupProbe:
+            httpGet:
+              path: /health
+              port: api
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: api
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: api
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.hermes.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+            # Managed leaves win over root and every named-profile config on
+            # each load, including native dashboard/s6 hot restarts.
+            - name: managed-config
+              mountPath: /etc/hermes
+              readOnly: true
+            - name: knowledge-data
+              mountPath: /vault
+              subPath: notes
+              readOnly: true
+        - name: knowledge
+          image: {{ include "hermess.image" .Values.knowledge.image | quote }}
+          imagePullPolicy: {{ .Values.knowledge.image.pullPolicy }}
+          securityContext:
+            runAsUser: {{ .Values.hermes.uid }}
+            runAsGroup: {{ .Values.hermes.gid }}
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: KNOWLEDGE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: KNOWLEDGE_API_KEY
+            - name: KNOWLEDGE_ROOT
+              value: /data/notes
+            - name: KNOWLEDGE_STATE_DIR
+              value: /data/state
+            - name: KNOWLEDGE_EXTRACTOR_URL
+              value: http://{{ include "hermess.fullname" . }}-extractor:8010
+            - name: TMPDIR
+              value: /data/state/import-spool
+            - name: KNOWLEDGE_VAULT_NAME
+              value: {{ .Values.knowledge.vaultName | quote }}
+            - name: KNOWLEDGE_CORS_ORIGINS
+              value: {{ .Values.caddy.appPublicUrl | quote }}
+            - name: KNOWLEDGE_EMBEDDING_BACKEND
+              value: {{ .Values.knowledge.embeddingBackend | quote }}
+            - name: KNOWLEDGE_MODEL_NAME
+              value: {{ .Values.knowledge.modelName | quote }}
+            - name: KNOWLEDGE_MODEL_REVISION
+              value: {{ .Values.knowledge.modelRevision | quote }}
+            - name: KNOWLEDGE_AUTO_INDEX
+              value: {{ .Values.knowledge.autoIndex | quote }}
+            - name: KNOWLEDGE_SCAN_INTERVAL_SECONDS
+              value: {{ .Values.knowledge.scanIntervalSeconds | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_MAX_FILES
+              value: {{ .Values.knowledge.import.maxFiles | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_MAX_FILE_BYTES
+              value: {{ .Values.knowledge.import.maxFileBytes | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_MAX_TOTAL_BYTES
+              value: {{ .Values.knowledge.import.maxTotalBytes | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_MAX_EXTRACTED_BYTES
+              value: {{ .Values.knowledge.import.maxExtractedBytes | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_PARSER_TIMEOUT_SECONDS
+              value: {{ .Values.knowledge.import.parserTimeoutSeconds | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_BATCH_DEADLINE_SECONDS
+              value: {{ .Values.knowledge.import.batchDeadlineSeconds | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_ORIGINAL_QUOTA_BYTES
+              value: {{ .Values.knowledge.import.originalQuotaBytes | int64 | quote }}
+            - name: KNOWLEDGE_IMPORT_FREE_SPACE_RESERVE_BYTES
+              value: {{ .Values.knowledge.import.freeSpaceReserveBytes | int64 | quote }}
+            - name: KNOWLEDGE_HERMES_HOMES
+              value: /hermes,/hermes/profiles/*
+          ports:
+            - name: knowledge
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: knowledge
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: knowledge
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: knowledge
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.knowledge.resources | nindent 12 }}
+          volumeMounts:
+            - name: knowledge-data
+              mountPath: /data
+            - name: data
+              mountPath: /hermes
+              readOnly: true
+      volumes:
+        - name: bootstrap
+          configMap:
+            name: {{ include "hermess.fullname" . }}-hermes-bootstrap
+        - name: managed-config
+          configMap:
+            name: {{ include "hermess.fullname" . }}-hermes-bootstrap
+            defaultMode: 0444
+            items:
+              - key: managed-config.yaml
+                path: config.yaml
+        - name: knowledge-data
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-knowledge" (include "hermess.fullname" .)) .Values.knowledge.persistence.existingClaim }}
+        {{- with .Values.hermes.persistence.existingClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ . }}
+        {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if not .Values.hermes.persistence.existingClaim }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.hermes.persistence.accessModes | nindent 10 }}
+        {{- with .Values.hermes.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.hermes.persistence.size }}
+  {{- end }}

@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hermess.fullname" . }}-caddy
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+data:
+  Caddyfile: |-
+    {
+      http_port 8080
+      https_port 8443
+      admin 127.0.0.1:2019
+      default_sni {$CADDY_DEFAULT_SNI}
+      # The pod listens on 8443 while the Service publishes 443. Disabling h3
+      # prevents Caddy from advertising the internal port in Alt-Svc.
+      servers {
+        protocols h1 h2
+      }
+      cert_issuer acme {
+        profile shortlived
+      }
+    }
+
+    (outer_auth) {
+      basic_auth {
+        {$CADDY_BASIC_AUTH_USER} {$CADDY_BASIC_AUTH_HASH}
+      }
+    }
+
+    (security_headers) {
+      header {
+        -Server
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+      }
+    }
+
+    (app_permissions) {
+      header Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+    }
+
+    (dashboard_permissions) {
+      header Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+
+    {$APP_ADDRESS} {
+      import outer_auth
+      import security_headers
+      import app_permissions
+      encode zstd gzip
+      redir /api/hermes /api/hermes/ 308
+      handle_path /api/hermes/* {
+        reverse_proxy {{ include "hermess.fullname" . }}-hermes:8642 {
+          header_up Authorization "Bearer {$HERMES_API_KEY}"
+        }
+      }
+      redir /api/knowledge /api/knowledge/ 308
+      @directKnowledgeImport path /api/knowledge/imports /api/knowledge/imports/*
+      handle @directKnowledgeImport {
+        respond 404
+      }
+      @directKnowledgeDelete {
+        method DELETE
+        path /api/knowledge/nodes/* /api/knowledge/notes/*
+      }
+      handle @directKnowledgeDelete {
+        respond 404
+      }
+      handle_path /api/knowledge/* {
+        reverse_proxy {{ include "hermess.fullname" . }}-knowledge:8000 {
+          header_up -Authorization
+          header_up X-API-Key {$KNOWLEDGE_API_KEY}
+        }
+      }
+      handle /api/control/knowledge/import {
+        request_body {
+          max_size 68MiB
+        }
+        reverse_proxy {{ include "hermess.fullname" . }}-frontend:3000 {
+          header_up -Authorization
+        }
+      }
+      handle {
+        reverse_proxy {{ include "hermess.fullname" . }}-frontend:3000 {
+          header_up -Authorization
+        }
+      }
+    }
+
+    {$DASHBOARD_ADDRESS} {
+      import outer_auth
+      import security_headers
+      import dashboard_permissions
+      encode zstd gzip
+      reverse_proxy {{ include "hermess.fullname" . }}-hermes:9119 {
+        header_up -Authorization
+      }
+    }

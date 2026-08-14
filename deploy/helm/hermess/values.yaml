@@ -1,0 +1,359 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+hermes:
+  # Hermes is intentionally fixed at one stateful replica. Pin a tested tag in production.
+  image:
+    repository: nousresearch/hermes-agent
+    tag: v2026.8.3
+    digest: sha256:16788311e2fa3035456bdc1bafb8ec2b1777db64ebf020af9bb7eb73c3712c9e
+    pullPolicy: IfNotPresent
+  defaultProfile: codex
+  uid: 10000
+  gid: 10000
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  # These files seed an empty PVC once. Hermes/dashboard edits on the PVC are
+  # authoritative afterward and are never overwritten during an upgrade.
+  profiles:
+    codex: |-
+      _config_version: 33
+
+      model:
+        provider: openai-codex
+        default: gpt-5.6-sol
+        openai_runtime: auto
+      fallback_providers:
+        - provider: openrouter
+          model: anthropic/claude-sonnet-4.6
+        - provider: anthropic
+          model: claude-sonnet-4-6
+      agent:
+        max_turns: 200
+        api_max_retries: 1
+        reasoning_effort: high
+        verify_on_stop: auto
+      tool_loop_guardrails:
+        hard_stop_enabled: true
+        hard_stop_after:
+          exact_failure: 5
+          idempotent_no_progress: 5
+      memory:
+        memory_enabled: true
+        user_profile_enabled: true
+        nudge_interval: 10
+        flush_min_turns: 6
+      skills:
+        creation_nudge_interval: 15
+      platforms:
+        api_server:
+          enabled: false # named-profile listener guard
+          extra:
+            direct_model_requests: true
+            model_routes:
+              coding:
+                provider: openai-codex
+                model: gpt-5.6-sol
+              fast:
+                provider: openai-codex
+                model: gpt-5.6-luna
+    openrouter: |-
+      _config_version: 33
+
+      model:
+        provider: openrouter
+        default: anthropic/claude-sonnet-4.6
+      fallback_providers:
+        - provider: anthropic
+          model: claude-sonnet-4-6
+        - provider: openai-codex
+          model: gpt-5.6-sol
+      provider_routing:
+        require_parameters: true
+        data_collection: deny
+      agent:
+        max_turns: 200
+        api_max_retries: 1
+      tool_loop_guardrails:
+        hard_stop_enabled: true
+        hard_stop_after:
+          exact_failure: 5
+          idempotent_no_progress: 5
+      memory:
+        memory_enabled: true
+        user_profile_enabled: true
+      platforms:
+        api_server:
+          enabled: false # named-profile listener guard
+          extra:
+            direct_model_requests: true
+            model_routes:
+              coding:
+                provider: openai-codex
+                model: gpt-5.6-sol
+              balanced:
+                provider: openrouter
+                model: anthropic/claude-sonnet-4.6
+    anthropic: |-
+      _config_version: 33
+
+      model:
+        provider: anthropic
+        default: claude-sonnet-4-6
+      fallback_providers:
+        - provider: openai-codex
+          model: gpt-5.6-sol
+        - provider: openrouter
+          model: anthropic/claude-sonnet-4.6
+      agent:
+        max_turns: 200
+        api_max_retries: 1
+      tool_loop_guardrails:
+        hard_stop_enabled: true
+        hard_stop_after:
+          exact_failure: 5
+          idempotent_no_progress: 5
+      memory:
+        memory_enabled: true
+        user_profile_enabled: true
+      platforms:
+        api_server:
+          enabled: false # named-profile listener guard
+          extra:
+            direct_model_requests: true
+            model_routes:
+              coding:
+                provider: openai-codex
+                model: gpt-5.6-sol
+              anthropic:
+                provider: anthropic
+                model: claude-sonnet-4-6
+    solari: |-
+      _config_version: 33
+
+      model:
+        provider: openai-codex
+        default: gpt-5.6-sol
+        openai_runtime: auto
+
+      fallback_providers:
+        - provider: openrouter
+          model: anthropic/claude-sonnet-4.6
+        - provider: anthropic
+          model: claude-sonnet-4-6
+
+      agent:
+        max_turns: 240
+        api_max_retries: 1
+        # Hermes' Ultra posture clamps to the model's official `max` effort for
+        # GPT-5.6 Sol while preserving the explicit high-capability profile label.
+        reasoning_effort: ultra
+        verify_on_stop: auto
+
+      tool_loop_guardrails:
+        hard_stop_enabled: true
+        hard_stop_after:
+          exact_failure: 5
+          idempotent_no_progress: 5
+
+      memory:
+        memory_enabled: true
+        user_profile_enabled: true
+        nudge_interval: 8
+        flush_min_turns: 5
+
+      skills:
+        creation_nudge_interval: 12
+
+      platforms:
+        api_server:
+          enabled: false # named-profile listener guard
+          extra:
+            direct_model_requests: true
+            model_routes:
+              sol-ultra:
+                provider: openai-codex
+                model: gpt-5.6-sol
+              fast:
+                provider: openai-codex
+                model: gpt-5.6-luna
+    local-vllm: |-
+      _config_version: 33
+
+      model:
+        provider: custom
+        default: local-model
+        base_url: http://vllm:8000/v1
+        api_key: none
+      fallback_providers:
+        - provider: openai-codex
+          model: gpt-5.6-sol
+        - provider: openrouter
+          model: anthropic/claude-sonnet-4.6
+      agent:
+        max_turns: 200
+        api_max_retries: 1
+      tool_loop_guardrails:
+        hard_stop_enabled: true
+        hard_stop_after:
+          exact_failure: 5
+          idempotent_no_progress: 5
+      memory:
+        memory_enabled: true
+        user_profile_enabled: true
+      platforms:
+        api_server:
+          enabled: false # named-profile listener guard
+          extra:
+            direct_model_requests: true
+            model_routes:
+              local:
+                provider: custom
+                model: local-model
+                base_url: http://vllm:8000/v1
+              coding:
+                provider: openai-codex
+                model: gpt-5.6-sol
+
+knowledge:
+  # Runs as a sidecar in the single Hermes StatefulSet pod so both private RWO
+  # state volumes are mounted once and move together during node failover.
+  # Use the same name for the corresponding local vault on Obsidian clients;
+  # generated obsidian:// links are vault-relative and reveal no server path.
+  vaultName: HERMESS
+  image:
+    repository: hermess-knowledge
+    tag: local
+    pullPolicy: IfNotPresent
+  embeddingBackend: auto
+  modelName: sentence-transformers/all-MiniLM-L6-v2
+  modelRevision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+  autoIndex: true
+  scanIntervalSeconds: 60
+  import:
+    maxFiles: 12
+    maxFileBytes: 16777216
+    maxTotalBytes: 67108864
+    maxExtractedBytes: 1800000
+    parserTimeoutSeconds: 30
+    batchDeadlineSeconds: 90
+    originalQuotaBytes: 4294967296
+    freeSpaceReserveBytes: 1073741824
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+extractor:
+  # This dedicated parser-only image deliberately excludes model weights,
+  # torch, FAISS, and transformers. Never point it at the knowledge image.
+  # One replica plus the API's admission lock preserves the global parser budget.
+  replicas: 1
+  image:
+    repository: hermess-extractor
+    tag: local
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+frontend:
+  # Keep one writer during upgrades; the Deployment uses Recreate so the BFF's
+  # revision-checked config, profile, cron, and MCP mutations never overlap.
+  replicas: 1
+  solari:
+    # Fail closed until a dedicated OpenAI Realtime API key is provisioned.
+    enabled: false
+    model: gpt-realtime-2.1
+  image:
+    repository: hermess-frontend
+    tag: local
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+caddy:
+  image:
+    repository: caddy
+    tag: 2.11.4-alpine
+    digest: sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    pullPolicy: IfNotPresent
+  appAddress: brain.example.com
+  defaultSni: brain.example.com
+  dashboardAddress: dashboard.brain.example.com
+  appPublicUrl: https://brain.example.com
+  dashboardPublicUrl: https://dashboard.brain.example.com
+  service:
+    type: LoadBalancer
+    annotations: {}
+    loadBalancerIP: ""
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# By default, create this Secret out-of-band (External Secrets, Sealed Secrets,
+# or kubectl). Required keys are printed by NOTES.txt. Setting create=true is
+# convenient for development but places supplied values in Helm release state.
+secrets:
+  existingSecret: hermess-secrets
+  create: false
+  values:
+    hermesApiKey: ""
+    knowledgeApiKey: ""
+    caddyBasicAuthUser: ""
+    caddyBasicAuthHash: ""
+    dashboardUsername: ""
+    dashboardPassword: ""
+    dashboardSessionSecret: ""
+    openrouterApiKey: ""
+    anthropicApiKey: ""
+    openaiApiKey: ""
+    solariRealtimeApiKey: ""
+    localLlmApiKey: ""
+
+networkPolicy:
+  enabled: true
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,37 @@
+{{- if not .Values.knowledge.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hermess.fullname" . }}-knowledge
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.knowledge.persistence.accessModes | nindent 4 }}
+  {{- with .Values.knowledge.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.knowledge.persistence.size }}
+{{- end }}
+{{- if and (not .Values.knowledge.persistence.existingClaim) (not .Values.caddy.persistence.existingClaim) }}
+---
+{{- end }}
+{{- if not .Values.caddy.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hermess.fullname" . }}-caddy
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.caddy.persistence.accessModes | nindent 4 }}
+  {{- with .Values.caddy.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.caddy.persistence.size }}
+{{- end }}

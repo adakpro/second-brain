@@ -1,0 +1,2 @@
+description: Local OpenAI-compatible inference with cloud fallbacks.
+role: private-local

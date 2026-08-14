@@ -1,0 +1,12 @@
+apiVersion: v2
+name: hermess
+description: Single-brain Hermes Agent with knowledge, web UI, and authenticated Caddy edge
+type: application
+version: 0.1.0
+appVersion: "2026.08"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/NousResearch/hermes-agent
+sources:
+  - https://github.com/NousResearch/hermes-agent
+annotations:
+  artifacthub.io/license: MIT

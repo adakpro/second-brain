@@ -1,0 +1,43 @@
+{{- if not (hasKey .Values.hermes.profiles .Values.hermes.defaultProfile) }}
+{{- fail (printf "hermes.defaultProfile %q has no matching hermes.profiles entry" .Values.hermes.defaultProfile) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hermess.fullname" . }}-hermes-bootstrap
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+data:
+  SOUL.md: |-
+    # Hermess
+
+    You are the persistent reasoning core of a private second-brain system.
+    Preserve useful context in Hermes memory, prefer verifiable actions,
+    surface uncertainty, and treat notes and credentials as private data.
+  skill-daily-synthesis.md: |-
+{{ .Files.Get "files/skills/daily-synthesis.md" | indent 4 }}
+  skill-obsidian-knowledge.md: |-
+{{ .Files.Get "files/skills/obsidian-knowledge.md" | indent 4 }}
+  skill-idea-gardener.md: |-
+{{ .Files.Get "files/skills/idea-gardener.md" | indent 4 }}
+  skill-concept-remixer.md: |-
+{{ .Files.Get "files/skills/concept-remixer.md" | indent 4 }}
+  skill-inspiration-board.md: |-
+{{ .Files.Get "files/skills/inspiration-board.md" | indent 4 }}
+  skill-solari-orchestrator.md: |-
+{{ .Files.Get "files/skills/solari-orchestrator.md" | indent 4 }}
+  skill-solari-orchestrator-roles.md: |-
+{{ .Files.Get "files/skills/solari-orchestrator-roles.md" | indent 4 }}
+  profile-solari-soul.md: |-
+{{ .Files.Get "files/profiles/solari-SOUL.md" | indent 4 }}
+  managed-config.yaml: |-
+    # Pinned by the official Hermes managed-scope overlay. It wins over every
+    # root/named-profile user config and cannot be changed through Hermes.
+    sessions:
+      auto_prune: false
+  {{- range $name, $config := .Values.hermes.profiles }}
+  root-profile-{{ $name }}.yaml: |-
+    {{- replace "    enabled: false # named-profile listener guard\n" "" $config | nindent 4 }}
+  profile-{{ $name }}.yaml: |-
+    {{- $config | nindent 4 }}
+  {{- end }}

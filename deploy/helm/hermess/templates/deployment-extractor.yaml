@@ -1,0 +1,111 @@
+{{- if ne (int .Values.extractor.replicas) 1 -}}
+{{- fail "extractor.replicas must remain 1 so untrusted parser concurrency stays globally bounded" -}}
+{{- end -}}
+{{- if eq (include "hermess.image" .Values.extractor.image) (include "hermess.image" .Values.knowledge.image) -}}
+{{- fail "extractor.image must be the dedicated parser-only build, not the knowledge writer image" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hermess.fullname" . }}-extractor
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+    app.kubernetes.io/component: extractor
+spec:
+  replicas: {{ .Values.extractor.replicas }}
+  revisionHistoryLimit: 2
+  # A rolling surge would briefly create two independent parser locks. Recreate
+  # preserves the single global parser budget across chart upgrades.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hermess.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: extractor
+  template:
+    metadata:
+      labels:
+        {{- include "hermess.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: extractor
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: extractor
+          image: {{ include "hermess.image" .Values.extractor.image | quote }}
+          imagePullPolicy: {{ .Values.extractor.image.pullPolicy }}
+          command: ["uvicorn"]
+          args:
+            - app.extractor_api:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8010"
+            - --workers
+            - "1"
+            - --no-access-log
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            # Keep every transient parser byte on the bounded in-memory mount.
+            - name: TMPDIR
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 8010
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            failureThreshold: 20
+            periodSeconds: 3
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.extractor.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

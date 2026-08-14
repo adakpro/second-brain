@@ -1,0 +1,5 @@
+interface:
+  display_name: "Solari Orchestrator"
+  short_description: "Coordinate a 96-role creative intelligence guild"
+  brand_color: "#45F3FF"
+  default_prompt: "Use $solari-orchestrator to assemble the smallest elite crew for this ambitious creative task."

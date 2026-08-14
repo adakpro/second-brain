@@ -1,0 +1,48 @@
+_config_version: 33
+
+model:
+  provider: openai-codex
+  default: gpt-5.6-sol
+  openai_runtime: auto
+
+fallback_providers:
+  - provider: openrouter
+    model: anthropic/claude-sonnet-4.6
+  - provider: anthropic
+    model: claude-sonnet-4-6
+
+agent:
+  max_turns: 240
+  api_max_retries: 1
+  # Hermes' Ultra posture clamps to the model's official `max` effort for
+  # GPT-5.6 Sol while preserving the explicit high-capability profile label.
+  reasoning_effort: ultra
+  verify_on_stop: auto
+
+tool_loop_guardrails:
+  hard_stop_enabled: true
+  hard_stop_after:
+    exact_failure: 5
+    idempotent_no_progress: 5
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  nudge_interval: 8
+  flush_min_turns: 5
+
+skills:
+  creation_nudge_interval: 12
+
+platforms:
+  api_server:
+    enabled: false # named-profile listener guard
+    extra:
+      direct_model_requests: true
+      model_routes:
+        sol-ultra:
+          provider: openai-codex
+          model: gpt-5.6-sol
+        fast:
+          provider: openai-codex
+          model: gpt-5.6-luna

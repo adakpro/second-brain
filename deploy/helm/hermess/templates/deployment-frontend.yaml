@@ -1,0 +1,133 @@
+{{- if ne (int .Values.frontend.replicas) 1 }}
+{{- fail "frontend.replicas must remain 1 because revision checks and mutation queues require a single BFF writer" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hermess.fullname" . }}-frontend
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  # Revision tokens and mutation queues are process-local. Never overlap two
+  # BFF writers during an upgrade until every upstream mutation is conditional.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hermess.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "hermess.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: frontend
+          image: {{ include "hermess.image" .Values.frontend.image | quote }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: NEXT_TELEMETRY_DISABLED
+              value: "1"
+            - name: HOSTNAME
+              value: 0.0.0.0
+            - name: PORT
+              value: "3000"
+            - name: SOLARI_REALTIME_ENABLED
+              value: {{ .Values.frontend.solari.enabled | quote }}
+            - name: SOLARI_REALTIME_MODEL
+              value: {{ .Values.frontend.solari.model | quote }}
+            {{- if .Values.frontend.solari.enabled }}
+            - name: OPENAI_REALTIME_API_KEY_FILE
+              value: /run/secrets/openai_realtime_api_key
+            {{- end }}
+            - name: HERMES_DASHBOARD_INTERNAL_URL
+              value: http://{{ include "hermess.fullname" . }}-hermes:9119
+            - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+            - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+            - name: KNOWLEDGE_API_URL
+              value: http://{{ include "hermess.fullname" . }}-knowledge:8000
+            - name: KNOWLEDGE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" . }}
+                  key: KNOWLEDGE_API_KEY
+          ports:
+            - name: http
+              containerPort: 3000
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          volumeMounts:
+            - name: next-cache
+              mountPath: /app/.next/cache
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.frontend.solari.enabled }}
+            # subPath exposes a regular file rather than Kubernetes' rotating
+            # symlink, matching the server's fail-closed secret validation.
+            - name: solari-realtime-secret
+              mountPath: /run/secrets/openai_realtime_api_key
+              subPath: openai_realtime_api_key
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: next-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.frontend.solari.enabled }}
+        - name: solari-realtime-secret
+          secret:
+            secretName: {{ include "hermess.secretName" . }}
+            defaultMode: 0440
+            items:
+              - key: OPENAI_REALTIME_API_KEY
+                path: openai_realtime_api_key
+                mode: 0440
+        {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

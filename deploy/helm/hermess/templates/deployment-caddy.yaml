@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hermess.fullname" . }}-caddy
+  labels:
+    {{- include "hermess.labels" . | nindent 4 }}
+    app.kubernetes.io/component: caddy
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hermess.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: caddy
+  template:
+    metadata:
+      annotations:
+        checksum/caddy: {{ include (print $.Template.BasePath "/configmap-caddy.yaml") . | sha256sum }}
+      labels:
+        {{- include "hermess.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: caddy
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: caddy
+          image: {{ include "hermess.image" .Values.caddy.image | quote }}
+          imagePullPolicy: {{ .Values.caddy.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [NET_BIND_SERVICE]
+          env:
+            - name: APP_ADDRESS
+              value: {{ .Values.caddy.appAddress | quote }}
+            - name: CADDY_DEFAULT_SNI
+              value: {{ .Values.caddy.defaultSni | quote }}
+            - name: DASHBOARD_ADDRESS
+              value: {{ .Values.caddy.dashboardAddress | quote }}
+            {{- range $key := list "CADDY_BASIC_AUTH_USER" "CADDY_BASIC_AUTH_HASH" "HERMES_API_KEY" "KNOWLEDGE_API_KEY" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hermess.secretName" $ }}
+                  key: {{ $key }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: http
+            failureThreshold: 20
+            periodSeconds: 3
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.caddy.resources | nindent 12 }}
+          volumeMounts:
+            - name: config-file
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: runtime-config
+              mountPath: /config
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config-file
+          configMap:
+            name: {{ include "hermess.fullname" . }}-caddy
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-caddy" (include "hermess.fullname" .)) .Values.caddy.persistence.existingClaim }}
+        - name: runtime-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

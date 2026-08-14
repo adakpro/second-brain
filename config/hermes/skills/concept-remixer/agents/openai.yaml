@@ -1,0 +1,4 @@
+interface:
+  display_name: "Concept Remixer"
+  short_description: "Bridge distant ideas with evidence and tension"
+  default_prompt: "Use $concept-remixer to connect two distant ideas in my vault."
